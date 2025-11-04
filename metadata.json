@@ -1,0 +1,7 @@
+{
+  "name": "DATLAS",
+  "description": "DATLAS is a midnight-themed, dark-only, monochromatic web application designed as a data-centric chat and dashboard interface.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

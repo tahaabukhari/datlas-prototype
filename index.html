@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DATLAS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.1/full/pyodide.js"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              gray: {
+                950: '#030712',
+              },
+              zinc: {
+                950: '#18181b',
+                975: '#121212',
+                985: '#0c0c0c'
+              }
+            },
+            keyframes: {
+              'fade-in': {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+              'subtle-pulse': {
+                '0%, 100%': { opacity: '0.8' },
+                '50%': { opacity: '1' },
+              },
+              'glint-sweep': {
+                '0%': { backgroundPosition: '-200% 0' },
+                '100%': { backgroundPosition: '200% 0' },
+              },
+              'wave-pulse': {
+                '0%': { transform: 'scale(1)', opacity: '0.5' },
+                '100%': { transform: 'scale(2.5)', opacity: '0' },
+              }
+            },
+            animation: {
+              'fade-in': 'fade-in 0.3s ease-out forwards',
+              'subtle-pulse': 'subtle-pulse 4s ease-in-out infinite',
+              'glint-sweep': 'glint-sweep 3s linear infinite',
+              'wave-pulse': 'wave-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            },
+            animationDelay: {
+              '250': '250ms',
+              '500': '500ms',
+              '750': '750ms',
+              '1000': '1000ms',
+            }
+          }
+        }
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react-router-dom": "https://aistudiocdn.com/react-router-dom@^7.9.5",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@latest/dist/index.js"
+  }
+}
+</script>
+</head>
+  <body>
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
