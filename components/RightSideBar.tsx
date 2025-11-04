@@ -7,7 +7,7 @@ import { ChevronRightIcon, XMarkIcon, CodeBracketIcon, SpinnerIcon } from './ico
 const RightSideBar: React.FC = () => {
     const { mobileNavState, closeSidebars, isDashboardOpen, closeDashboard } = useUI();
     const { isPyodideReady, pyodideMessage } = usePyodide();
-    const { plots, clearPlots } = useDashboard();
+    const { plots } = useDashboard();
     const [showCode, setShowCode] = useState(false);
     
     const isMobileOpen = mobileNavState === 'right';
@@ -15,7 +15,6 @@ const RightSideBar: React.FC = () => {
 
     const handleClose = () => {
         closeDashboard();
-        clearPlots();
     };
 
     return (
@@ -66,8 +65,8 @@ const RightSideBar: React.FC = () => {
                         </div>
                     </div>
                 ) : (
-                    <div className={`text-center text-gray-500 transition-opacity duration-200 ${isDashboardOpen ? 'opacity-100' : 'opacity-0'}`}>
-                        Ask for a plot to see it appear here.
+                    <div className={`flex items-center justify-center h-full text-center text-gray-500 transition-opacity duration-200 ${isDashboardOpen ? 'opacity-100' : 'opacity-0'}`}>
+                        Nothing to see here... yet.
                     </div>
                 )}
             </div>

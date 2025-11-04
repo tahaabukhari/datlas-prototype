@@ -19,10 +19,26 @@ export const UIProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const [isDashboardOpen, setIsDashboardOpen] = useState(false);
 
     const openLeftSidebar = () => setMobileNavState('left');
-    const openRightSidebar = () => setMobileNavState('right');
-    const closeSidebars = () => setMobileNavState('none');
-    const openDashboard = () => setIsDashboardOpen(true);
-    const closeDashboard = () => setIsDashboardOpen(false);
+
+    const openDashboard = () => {
+        setIsDashboardOpen(true);
+        setMobileNavState('right');
+    };
+    
+    const openRightSidebar = openDashboard;
+
+    const closeDashboard = () => {
+        setIsDashboardOpen(false);
+        setMobileNavState('none');
+    };
+
+    const closeSidebars = () => {
+        if (mobileNavState === 'right') {
+            closeDashboard();
+        } else {
+            setMobileNavState('none');
+        }
+    };
 
     return (
         <UIContext.Provider value={{ 
