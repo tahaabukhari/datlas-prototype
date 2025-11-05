@@ -17,7 +17,7 @@ const App: React.FC = () => {
           <PyodideProvider>
             <DashboardProvider>
               <HashRouter>
-                <div className="flex h-screen bg-zinc-985 text-gray-100 font-sans antialiased overflow-hidden">
+                <div className="flex h-full bg-zinc-985 text-gray-100 font-sans antialiased">
                   <LeftSideBar />
                   <main className="flex-1 flex flex-col min-w-0">
                     <Routes>
