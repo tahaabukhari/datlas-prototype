@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Message, UploadedFile } from '../types';
+import { Message, UploadedFile, PlotlyFigure } from '../types';
 import { useFiles } from '../context/FileContext';
 import { useUI } from '../context/UIContext';
 import { useDashboard } from '../context/DashboardContext';
-import { runPipeline } from '../lib/plotlyPipeline';
+import { choosePlot, buildPlot } from '../lib/plotlyPipeline';
 import { MicrophoneIcon, StopCircleIcon, XMarkIcon, PaperClipIcon, PaperAirplaneIcon, Bars3Icon, ChartBarIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
-import { GoogleGenAI, Chat } from '@google/genai';
+import { GoogleGenAI, Chat, Part } from '@google/genai';
+import { parse } from 'csv-parse/sync';
 
 const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     if (message.sender === 'system') {
@@ -122,14 +123,20 @@ const useRecorder = (onStop: (audioBlob: Blob) => void) => {
     return { isRecording, startRecording, stopRecording, error };
 };
 
-const demoLineChart = () => ({
-  fig: {
-    data: [{ x: [1, 2, 3], y: [3, 1, 6], type: 'scatter', mode: 'lines+markers', marker: { color: '#fff' } }],
-    layout: { title: 'Demo Chart', paper_bgcolor: 'transparent', plot_bgcolor: 'transparent', font: { color: '#fff' }, margin: { l: 60, r: 20, t: 40, b: 60 } }
-  },
-  desc: 'This is a demo chart. Please upload a CSV file and ask for a visualization to see real results.'
-});
-
+const demoLineChart = (): PlotlyFigure => {
+    return {
+      data: [{ x: [1, 2, 3], y: [3, 1, 6], type: 'scatter', mode: 'lines+markers', marker: { color: '#fff' } }],
+      layout: { 
+          title: 'Demo Chart',
+          xaxis: { title: 'X-Axis' },
+          yaxis: { title: 'Y-Axis' },
+          paper_bgcolor: 'transparent', 
+          plot_bgcolor: 'transparent', 
+          font: { color: '#fff' },
+          margin: { l: 40, r: 20, t: 40, b: 40 },
+      }
+    };
+}
 
 const MainCenter: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([]);
@@ -137,7 +144,7 @@ const MainCenter: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const { files, addFiles } = useFiles();
     const { openLeftSidebar, openRightSidebar, isDashboardOpen, openDashboard, closeDashboard } = useUI();
-    const { addPlot, addDashboard } = useDashboard();
+    const { addPlot } = useDashboard();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const chat = useRef<Chat | null>(null);
@@ -210,56 +217,76 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
         setIsLoading(true);
 
         const csvContent = readyToSendFiles.length > 0 ? (readyToSendFiles[0].rawContent ?? '') : '';
-        const shouldPlot = csvContent.length > 0;
+        const triggerWords = /chart|graph|plot|visuali|dashboard|show me|draw/i;
+        const forcePlot = triggerWords.test(currentInput) || !!csvContent;
 
         const geminiPromise = (async () => {
             if (!chat.current) throw new Error("Chat session not initialized.");
-            return chat.current.sendMessage({ message: currentInput });
+            
+            const messageParts: Part[] = [{ text: currentInput }];
+            
+            for (const file of readyToSendFiles) {
+                if(file.base64Data) {
+                    messageParts.push({ inlineData: { data: file.base64Data, mimeType: file.type } });
+                }
+            }
+            return chat.current.sendMessage({ message: messageParts });
         })();
-        
-        const plotPromise = shouldPlot
-          ? runPipeline(currentInput, csvContent)
-          : Promise.resolve(null);
+
+        const plotPromise = (async () => {
+            if (!forcePlot) return null;
+
+            if (!csvContent) {
+                return {
+                    fig: demoLineChart(),
+                    desc: 'No data supplied – showing a demo chart. Please attach a CSV file.'
+                };
+            }
+
+            try {
+                const tempRows = parse(csvContent, { columns: true, skip_empty_lines: true, trim: true, to: 1 });
+                const headers = tempRows.length > 0 ? Object.keys(tempRows[0]) : [];
+
+                if (headers.length === 0) {
+                     return {
+                        fig: demoLineChart(),
+                        desc: 'Could not read data headers. Please check the CSV file format. Showing a demo chart.'
+                     };
+                }
+                
+                const plotPrompt = currentInput.trim() === '' ? "Summarize the data in this file with a suitable chart." : currentInput;
+                const instructions = await choosePlot(plotPrompt, headers);
+                const { fig, desc } = await buildPlot(instructions, csvContent);
+                return { fig, desc };
+            } catch (error) {
+                console.error("Error generating plot:", error);
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                return { error: `Plotting Error: ${errorMessage}` };
+            }
+        })();
 
         try {
-            const geminiPromiseWithCatch = geminiPromise.catch(e => {
-                console.error("Gemini text generation failed:", e);
-                return null;
-            });
+            const [geminiResponse, plotData] = await Promise.all([
+                geminiPromise,
+                plotPromise
+            ]);
 
-            if (shouldPlot) {
-                try {
-                    const plotResult = await plotPromise;
-                    if (plotResult) {
-                        if (plotResult.kind === 'single') {
-                            console.log('✅ SINGLE PLOT DATA:', plotResult.data);
-                            addPlot({ id: `plot-${Date.now()}`, description: plotResult.data.desc, figure: plotResult.data.fig });
-                        } else if (plotResult.kind === 'dashboard') {
-                            console.log('✅ DASHBOARD DATA:', plotResult.data);
-                            addDashboard({ id: `dash-${Date.now()}`, descriptor: plotResult.data });
-                        }
-                        openDashboard();
-                    }
-                } catch (e) {
-                    console.error('❌ PLOT FAILED:', e);
-                    const { fig } = demoLineChart();
+            // 1. Handle plot first
+            if (plotData) {
+                if (plotData.error) {
+                    const errorMessage: Message = { id: Date.now() + 2, text: plotData.error, sender: 'system' };
+                    setMessages(prev => [...prev, errorMessage]);
+                } else if (plotData.fig) {
                     addPlot({
-                        id: `error-${Date.now()}`,
-                        description: `Chart failed: ${e instanceof Error ? e.message : 'Unknown error'}. Check console.`,
-                        figure: fig
+                        id: `plot-${Date.now()}`,
+                        description: plotData.desc,
+                        figure: plotData.fig
                     });
-                    openDashboard();
-                }
-            } else {
-                const triggerWords = /chart|graph|plot|visual|dashboard|show|draw/i;
-                if (triggerWords.test(currentInput)) {
-                    const demo = demoLineChart();
-                    addPlot({ id: `demo-${Date.now()}`, description: demo.desc, figure: demo.fig });
                     openDashboard();
                 }
             }
 
-            const geminiResponse = await geminiPromiseWithCatch;
+            // 2. Handle AI text
             if (geminiResponse) {
                 const botMessage: Message = { id: Date.now() + 1, text: geminiResponse.text, sender: 'bot' };
                 setMessages(prev => [...prev, botMessage]);
@@ -269,7 +296,7 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
 
         } catch (error) {
             console.error("Error during send:", error);
-            const errorMessage: Message = { id: Date.now() + 1, text: 'Oops! An unexpected error occurred. Please try again.', sender: 'system' };
+            const errorMessage: Message = { id: Date.now() + 1, text: 'Oops! Something went wrong while communicating with the AI. Please try again.', sender: 'system' };
             setMessages(prev => [...prev, errorMessage]);
         } finally {
             setIsLoading(false);
@@ -329,7 +356,6 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
             <div className="flex-1 overflow-y-auto p-6 pb-40">
                  <div className="max-w-4xl mx-auto space-y-4">
                     {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
-                    {/* Fix: Corrected typo from TypIndicator to TypingIndicator */}
                     {isLoading && <TypingIndicator />}
                     <div ref={messagesEndRef} />
                 </div>

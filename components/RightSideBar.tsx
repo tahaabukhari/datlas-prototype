@@ -3,22 +3,18 @@ import { useUI } from '../context/UIContext';
 import { useDashboard } from '../context/DashboardContext';
 import { ChevronRightIcon, ChartBarIcon } from '@heroicons/react/24/outline';
 import PlotlyDash from './PlotlyDash';
-import DashboardTray from './DashboardTray';
 
 const RightSideBar: React.FC = () => {
     const { mobileNavState, closeSidebars, isDashboardOpen, closeDashboard } = useUI();
-    const { plots, dashboards } = useDashboard();
+    const { plots } = useDashboard();
 
     const isMobileOpen = mobileNavState === 'right';
     const latestPlot = plots.length > 0 ? plots[0] : null;
-    const latestDashboard = dashboards.length > 0 ? dashboards[0] : null;
 
     const handleClose = () => {
         closeDashboard();
         closeSidebars();
     };
-
-    const hasContent = latestDashboard || latestPlot;
 
     return (
         <aside className={`
@@ -38,13 +34,12 @@ const RightSideBar: React.FC = () => {
                     <ChevronRightIcon className="h-6 w-6" />
                 </button>
                 <div className={`font-semibold text-gray-200 transition-opacity duration-200 ${isDashboardOpen ? 'opacity-100' : 'opacity-0'}`}>Dashboard</div>
+                {/* The top-right button is now unified */}
                  <div className="w-10 h-10" />
             </div>
-            <div className="flex-1 flex flex-col overflow-y-auto min-w-full">
-                {latestDashboard ? (
-                     <DashboardTray dashboard={latestDashboard.descriptor} />
-                ) : latestPlot ? (
-                    <div className="animate-fade-in space-y-4 p-4">
+            <div className="flex-1 flex flex-col p-4 overflow-y-auto min-w-full">
+                {latestPlot && latestPlot.figure ? (
+                    <div className="animate-fade-in space-y-4">
                         <div
                             className="prose prose-invert prose-sm text-gray-300"
                             dangerouslySetInnerHTML={{ __html: latestPlot.description.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }}
