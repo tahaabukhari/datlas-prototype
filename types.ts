@@ -25,8 +25,13 @@ export interface UploadedFile {
     errorMessage?: string;
 }
 
+export interface PlotlyFigure {
+    data: any[];
+    layout: any;
+}
+
 export interface DashboardContent {
   id: string;
   description: string;
-  spec: object; // Vega-Lite spec object
+  figure: PlotlyFigure;
 }

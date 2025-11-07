@@ -1,31 +1,15 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { useUI } from '../context/UIContext';
 import { useDashboard } from '../context/DashboardContext';
 import { ChevronRightIcon, ChartBarIcon } from '@heroicons/react/24/outline';
-
-// vegaEmbed is available globally from the script tag in index.html
-declare global {
-    interface Window {
-        vegaEmbed: (el: HTMLElement | string, spec: object, opts?: object) => Promise<any>;
-    }
-}
+import PlotlyDash from './PlotlyDash';
 
 const RightSideBar: React.FC = () => {
     const { mobileNavState, closeSidebars, isDashboardOpen, closeDashboard } = useUI();
     const { plots } = useDashboard();
-    const chartContainer = useRef<HTMLDivElement>(null);
 
     const isMobileOpen = mobileNavState === 'right';
     const latestPlot = plots.length > 0 ? plots[0] : null;
-
-    useEffect(() => {
-        if (latestPlot && latestPlot.spec && chartContainer.current) {
-            // Clear previous chart before embedding a new one
-            chartContainer.current.innerHTML = '';
-            window.vegaEmbed(chartContainer.current, latestPlot.spec, { actions: false })
-                .catch(error => console.error("Vega-Embed Error:", error));
-        }
-    }, [latestPlot]);
 
     const handleClose = () => {
         closeDashboard();
@@ -54,14 +38,14 @@ const RightSideBar: React.FC = () => {
                  <div className="w-10 h-10" />
             </div>
             <div className="flex-1 flex flex-col p-4 overflow-y-auto min-w-full">
-                {latestPlot ? (
+                {latestPlot && latestPlot.figure ? (
                     <div className="animate-fade-in space-y-4">
                         <div
                             className="prose prose-invert prose-sm text-gray-300"
                             dangerouslySetInnerHTML={{ __html: latestPlot.description.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }}
                         />
-                        <div ref={chartContainer} className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800 w-full min-h-[300px]">
-                             {/* Vega-Embed will render the chart here */}
+                        <div className="bg-zinc-900/50 p-2 rounded-lg border border-zinc-800 w-full">
+                           <PlotlyDash fig={latestPlot.figure} />
                         </div>
                     </div>
                 ) : (

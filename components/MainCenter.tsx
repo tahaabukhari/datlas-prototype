@@ -1,11 +1,12 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Message, UploadedFile } from '../types';
+import { Message, UploadedFile, PlotlyFigure } from '../types';
 import { useFiles } from '../context/FileContext';
 import { useUI } from '../context/UIContext';
 import { useDashboard } from '../context/DashboardContext';
-import { runRecipe, chooseRecipe, isPlotRequest } from '../lib/dashboardPipeline';
+import { choosePlot, buildPlot } from '../lib/plotlyPipeline';
 import { MicrophoneIcon, StopCircleIcon, XMarkIcon, PaperClipIcon, PaperAirplaneIcon, Bars3Icon, ChartBarIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { GoogleGenAI, Chat, Part } from '@google/genai';
+import { parse } from 'csv-parse/sync';
 
 const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     if (message.sender === 'system') {
@@ -122,6 +123,21 @@ const useRecorder = (onStop: (audioBlob: Blob) => void) => {
     return { isRecording, startRecording, stopRecording, error };
 };
 
+const demoLineChart = (): PlotlyFigure => {
+    return {
+      data: [{ x: [1, 2, 3], y: [3, 1, 6], type: 'scatter', mode: 'lines+markers', marker: { color: '#fff' } }],
+      layout: { 
+          title: 'Demo Chart',
+          xaxis: { title: 'X-Axis' },
+          yaxis: { title: 'Y-Axis' },
+          paper_bgcolor: 'transparent', 
+          plot_bgcolor: 'transparent', 
+          font: { color: '#fff' },
+          margin: { l: 40, r: 20, t: 40, b: 40 },
+      }
+    };
+}
+
 const MainCenter: React.FC = () => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [input, setInput] = useState('');
@@ -200,30 +216,11 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
         setInput('');
         setIsLoading(true);
 
-        // --- New Plotting Logic ---
-        if (isPlotRequest(currentInput)) {
-            try {
-                openDashboard();
-                const csvContent = readyToSendFiles.length > 0 ? readyToSendFiles[0].rawContent : '';
-                const recipeName = chooseRecipe(currentInput);
-                const plotResult = await runRecipe(recipeName, csvContent || "");
+        const csvContent = readyToSendFiles.length > 0 ? (readyToSendFiles[0].rawContent ?? '') : '';
+        const triggerWords = /chart|graph|plot|visuali|dashboard|show me|draw/i;
+        const forcePlot = triggerWords.test(currentInput) || !!csvContent;
 
-                if (plotResult && plotResult.spec) {
-                    addPlot({
-                        id: `plot-${Date.now()}`,
-                        description: plotResult.desc,
-                        spec: plotResult.spec,
-                    });
-                }
-            } catch (error) {
-                console.error("Error generating plot:", error);
-                const errorMessage: Message = { id: Date.now() + 2, text: `Plotting Error: ${error instanceof Error ? error.message : String(error)}`, sender: 'system' };
-                setMessages(prev => [...prev, errorMessage]);
-            }
-        }
-        
-        // --- AI Chat Logic (runs in parallel) ---
-        try {
+        const geminiPromise = (async () => {
             if (!chat.current) throw new Error("Chat session not initialized.");
             
             const messageParts: Part[] = [{ text: currentInput }];
@@ -233,22 +230,79 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
                     messageParts.push({ inlineData: { data: file.base64Data, mimeType: file.type } });
                 }
             }
+            return chat.current.sendMessage({ message: messageParts });
+        })();
 
-            const response = await chat.current.sendMessage({ message: messageParts });
-            const botResponseText = response.text;
-            
-            const botMessage: Message = { id: Date.now() + 1, text: botResponseText, sender: 'bot' };
-            setMessages(prev => [...prev, botMessage]);
+        const plotPromise = (async () => {
+            if (!forcePlot) return null;
+
+            if (!csvContent) {
+                return {
+                    fig: demoLineChart(),
+                    desc: 'No data supplied – showing a demo chart. Please attach a CSV file.'
+                };
+            }
+
+            try {
+                const tempRows = parse(csvContent, { columns: true, skip_empty_lines: true, trim: true, to: 1 });
+                const headers = tempRows.length > 0 ? Object.keys(tempRows[0]) : [];
+
+                if (headers.length === 0) {
+                     return {
+                        fig: demoLineChart(),
+                        desc: 'Could not read data headers. Please check the CSV file format. Showing a demo chart.'
+                     };
+                }
+                
+                const plotPrompt = currentInput.trim() === '' ? "Summarize the data in this file with a suitable chart." : currentInput;
+                const instructions = await choosePlot(plotPrompt, headers);
+                const { fig, desc } = await buildPlot(instructions, csvContent);
+                return { fig, desc };
+            } catch (error) {
+                console.error("Error generating plot:", error);
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                return { error: `Plotting Error: ${errorMessage}` };
+            }
+        })();
+
+        try {
+            const [geminiResponse, plotData] = await Promise.all([
+                geminiPromise,
+                plotPromise
+            ]);
+
+            // 1. Handle plot first
+            if (plotData) {
+                if (plotData.error) {
+                    const errorMessage: Message = { id: Date.now() + 2, text: plotData.error, sender: 'system' };
+                    setMessages(prev => [...prev, errorMessage]);
+                } else if (plotData.fig) {
+                    addPlot({
+                        id: `plot-${Date.now()}`,
+                        description: plotData.desc,
+                        figure: plotData.fig
+                    });
+                    openDashboard();
+                }
+            }
+
+            // 2. Handle AI text
+            if (geminiResponse) {
+                const botMessage: Message = { id: Date.now() + 1, text: geminiResponse.text, sender: 'bot' };
+                setMessages(prev => [...prev, botMessage]);
+            }
             
             setAttachedFileUrls([]);
+
         } catch (error) {
-            console.error("Error sending message to Gemini:", error);
-            const errorMessage: Message = { id: Date.now() + 1, text: 'Oops! Something went wrong. Please try again.', sender: 'system' };
+            console.error("Error during send:", error);
+            const errorMessage: Message = { id: Date.now() + 1, text: 'Oops! Something went wrong while communicating with the AI. Please try again.', sender: 'system' };
             setMessages(prev => [...prev, errorMessage]);
         } finally {
             setIsLoading(false);
         }
     };
+
 
     const handleKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
