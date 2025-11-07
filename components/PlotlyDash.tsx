@@ -7,7 +7,7 @@ declare var Plotly: any;
 const PlotlyDash: React.FC<{ fig: PlotlyFigure }> = ({ fig }) => {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!ref.current || !fig) return;
+    if (!ref.current || !fig || !fig.data?.length) return;
     
     Plotly.newPlot(ref.current, fig.data, fig.layout, { responsive: true, displayModeBar: false });
     

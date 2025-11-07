@@ -2,15 +2,22 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { parse } from 'csv-parse/sync';
 import { PlotlyFigure } from '../types';
 
-type PlotlyInstructions = {
-  type: 'line' | 'bar' | 'scatter' | 'heatmap' | 'box' | 'violin';
+export type PlotlyInstructions = {
+  type: 'line' | 'bar' | 'scatter' | 'heatmap' | 'box' | 'violin' | 'histogram' | 'sunburst' | 'treemap';
   traces: {
     x: string;
     y: string;
-    z?: string; 
+    z?: string;
     name?: string;
     mode?: 'lines' | 'markers' | 'lines+markers';
-    marker?: { color: string };
+    marker?: { color: string; size?: number };
+    line?: { shape?: 'linear' | 'spline'; width?: number };
+    groups?: string; // For aggregation grouping
+    transforms?: {
+      type: 'aggregate' | 'filter' | 'groupby';
+      aggregations?: { target: string; func: 'sum' | 'avg' | 'min' | 'max'; enabled?: boolean }[];
+      filters?: { target: string; operation: '>' | '<' | '>=' | '<=' | '==' | '!='; value: string | number }[];
+    }[];
   }[];
   layout: {
     title: string;
@@ -20,109 +27,127 @@ type PlotlyInstructions = {
     plot_bgcolor: 'transparent';
     font: { color: '#fff' };
     margin: { l: number; r: number; t: number; b: number };
-    grid?: { rows: number; columns: number };
+    barmode?: 'group' | 'stack' | 'overlay';
+    bargap?: number;
+    grid?: { rows: number; columns: number; pattern: 'independent' };
   };
   desc: string;
 };
 
 const MAX_ROWS = 1000;
 
-export const choosePlot = async (prompt: string, headers: string[]): Promise<PlotlyInstructions> => {
+export async function analyseRequest(prompt: string, headers: string[]): Promise<PlotlyInstructions> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const headersString = headers.join(', ');
 
-    const schema = {
-        type: Type.OBJECT,
-        properties: {
-            type: { type: Type.STRING, enum: ['line', 'bar', 'scatter', 'heatmap', 'box', 'violin'] },
-            traces: {
-                type: Type.ARRAY,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        x: { type: Type.STRING },
-                        y: { type: Type.STRING },
-                        z: { type: Type.STRING },
-                        name: { type: Type.STRING },
-                        mode: { type: Type.STRING, enum: ['lines', 'markers', 'lines+markers'] },
-                        marker: {
-                            type: Type.OBJECT,
-                            properties: {
-                                color: { type: Type.STRING }
-                            }
-                        }
-                    },
-                    required: ['y']
-                }
-            },
-            layout: {
-                type: Type.OBJECT,
-                properties: {
-                    title: { type: Type.STRING },
-                    xaxis: { type: Type.OBJECT, properties: { title: { type: Type.STRING } }, required: ['title'] },
-                    yaxis: { type: Type.OBJECT, properties: { title: { type: Type.STRING } }, required: ['title'] },
-                    paper_bgcolor: { type: Type.STRING },
-                    plot_bgcolor: { type: Type.STRING },
-                    font: { type: Type.OBJECT, properties: { color: { type: Type.STRING } }, required: ['color'] },
-                    margin: {
-                        type: Type.OBJECT,
-                        properties: {
-                            l: { type: Type.INTEGER },
-                            r: { type: Type.INTEGER },
-                            t: { type: Type.INTEGER },
-                            b: { type: Type.INTEGER }
-                        },
-                        required: ['l', 'r', 't', 'b']
-                    },
-                    grid: {
-                        type: Type.OBJECT,
-                        properties: {
-                            rows: { type: Type.INTEGER },
-                            columns: { type: Type.INTEGER }
-                        }
-                    }
-                },
-                required: ['title', 'xaxis', 'yaxis', 'paper_bgcolor', 'plot_bgcolor', 'font', 'margin']
-            },
-            desc: { type: Type.STRING }
-        },
-        required: ['type', 'traces', 'layout', 'desc']
-    };
+    const system = `You are Plotly-Builder 3.0.
+You receive:
+- User request
+- CSV column headers
+You reply **only** a JSON object that matches TypeScript type PlotlyInstructions.
 
-    const fullPrompt = `User prompt: "${prompt}"\nCSV Headers: [${headers.join(', ')}]`;
-
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: fullPrompt,
-        config: {
-            systemInstruction: `You are Phoni-Plotly.
-Reply ONLY with a JSON object that matches TypeScript type PlotlyInstructions.
-Never write markdown, never explain.
-Use only column names that exist in the CSV header.
-Pick colours from this midnight palette:
-#fff #22d3ee #a78bfa #f472b6 #fbbf24 #34d399
-Make title, axis titles and trace names concise and relevant.`,
-            responseMimeType: "application/json",
-            responseSchema: schema,
-        },
-    });
+Rules:
+- Use **only column names that exist** in the headers provided.
+- If request mentions filtering (e.g. "sales > 100") set filters accordingly.
+- If request mentions aggregation (e.g. "sum by region") set the 'aggregate' transform, choose the correct operator, and set the 'groups' property on the trace to the region column.
+- Pick colours from midnight palette: #fff #22d3ee #a78bfa #f472b6 #fbbf24 #34d499
+- Title, axis titles and trace names must be **exactly** what the user asked for.
+- If ambiguous, pick the **most obvious** chart and explain in desc.
+- Reply **only** JSON, no markdown, no comments.`;
+    
+    const fullPrompt = `${system}\n\nUser request: "${prompt}"\n\nCSV Headers:\n${headersString}`;
 
     try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-pro',
+            contents: fullPrompt,
+            config: {
+                responseMimeType: "application/json",
+            },
+        });
+        
         const jsonText = response.text.trim();
         const instructions = JSON.parse(jsonText);
+        
+        // Add defaults to prevent crashes and enforce dark theme
+        instructions.layout.paper_bgcolor = 'transparent';
+        instructions.layout.plot_bgcolor = 'transparent';
+        instructions.layout.font = { color: '#fff' };
+        instructions.layout.margin = { l: 60, r: 20, t: 40, b: 60, ...(instructions.layout.margin || {}) };
+        
         return instructions as PlotlyInstructions;
+
     } catch (e) {
-        console.error("Failed to parse AI response as JSON:", e, response.text);
-        throw new Error("AI failed to generate valid plot instructions.");
+        console.error("Error calling Gemini API or parsing response:", e);
+        if (e instanceof Error) {
+           throw new Error(`AI analysis failed: ${e.message}`);
+        }
+        throw new Error("AI failed to generate valid plot instructions. The response might be malformed or the API call failed.");
     }
-};
+}
+
+function evalExpr(cell: any, op: string, val: any) {
+  const n = Number(cell);
+  const v = Number(val);
+  switch (op) {
+    case '>':  return n > v;
+    case '<':  return n < v;
+    case '>=': return n >= v;
+    case '<=': return n <= v;
+    case '==': return cell == val;
+    case '!=': return cell != val;
+    default:   return true;
+  }
+}
+
+function applyTransforms(rows: any[], t: PlotlyInstructions['traces'][0]) {
+  let out = [...rows];
+  for (const tx of t.transforms ?? []) {
+    if (tx.type === 'filter' && tx.filters) {
+      for (const f of tx.filters) {
+        if (!f.target || !f.operation || f.value === undefined) continue;
+        out = out.filter(r => evalExpr(r[f.target], f.operation, f.value));
+      }
+    }
+    if (tx.type === 'aggregate' && tx.aggregations) {
+      const groups = new Map<string, any[]>();
+      for (const r of out) {
+        const key = t.groups ? String(r[t.groups]) : 'all';
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key)!.push(r);
+      }
+      out = Array.from(groups.entries()).map(([g, arr]) => {
+        const row: any = { [t.groups ?? 'group']: g };
+        for (const agg of tx.aggregations!) {
+          if (!agg.target || !agg.func) continue;
+          const vals = arr.map(r => Number(r[agg.target])).filter(v => !isNaN(v));
+          if (vals.length === 0) {
+              row[agg.target] = 0;
+              continue;
+          }
+          row[agg.target] = agg.func === 'sum' ? vals.reduce((a, b) => a + b, 0)
+                             : agg.func === 'avg' ? vals.reduce((a, b) => a + b, 0) / vals.length
+                             : agg.func === 'max' ? Math.max(...vals)
+                             : agg.func === 'min' ? Math.min(...vals)
+                             : vals[0];
+        }
+        return row;
+      });
+    }
+  }
+  return out;
+}
 
 const BUILDERS: Record<string, (t: any, rows: any[]) => any> = {
-    line: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), type: 'scatter', mode: 'lines+markers', name: t.name, marker: t.marker }),
+    line: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), type: 'scatter', mode: t.mode || 'lines+markers', name: t.name, marker: t.marker, line: t.line }),
     bar: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), type: 'bar', name: t.name, marker: t.marker }),
     scatter: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), type: 'scatter', mode: 'markers', name: t.name, marker: t.marker }),
-    heatmap: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), z: rows.map(r => r[t.z] ?? 0), type: 'heatmap', colorscale: 'Blues' }),
-    box: (t, rows) => ({ y: rows.map(r => r[t.y]), type: 'box', name: t.name, marker: t.marker }),
-    violin: (t, rows) => ({ y: rows.map(r => r[t.y]), type: 'violin', name: t.name, marker: t.marker }),
+    heatmap: (t, rows) => ({ x: rows.map(r => r[t.x]), y: rows.map(r => r[t.y]), z: rows.map(r => r[t.z] ?? 0), type: 'heatmap', colorscale: 'Viridis' }),
+    box: (t, rows) => ({ y: rows.map(r => r[t.y]), x: t.x ? rows.map(r => r[t.x]) : undefined, type: 'box', name: t.name, marker: t.marker }),
+    violin: (t, rows) => ({ y: rows.map(r => r[t.y]), x: t.x ? rows.map(r => r[t.x]) : undefined, type: 'violin', name: t.name, marker: t.marker }),
+    histogram: (t, rows) => ({ x: rows.map(r => r[t.x]), type: 'histogram', name: t.name, marker: t.marker }),
+    sunburst: (t, rows) => ({ labels: rows.map(r => r[t.x]), parents: rows.map(r => r[t.y]), values: rows.map(r => r[t.z]), type: 'sunburst', name: t.name }),
+    treemap: (t, rows) => ({ labels: rows.map(r => r[t.x]), parents: rows.map(r => r[t.y]), values: rows.map(r => r[t.z]), type: 'treemap', name: t.name }),
 };
 
 export const buildPlot = async (instructions: PlotlyInstructions, csvText: string): Promise<{ fig: PlotlyFigure; desc: string }> => {
@@ -140,7 +165,17 @@ export const buildPlot = async (instructions: PlotlyInstructions, csvText: strin
             throw new Error(`Unknown plot type: ${instructions.type}`);
         }
 
-        const data = instructions.traces.map(trace => builderFn(trace, cappedRows));
+        const data = instructions.traces.map(trace => {
+            const transformedRows = applyTransforms(cappedRows, trace);
+            const newTrace = {...trace};
+            // If aggregation was performed, the x and y axes might need to be remapped
+            // e.g., x becomes the grouping column, y becomes the aggregated value column
+            if(trace.transforms?.some(tx => tx.type === 'aggregate') && trace.groups) {
+                newTrace.x = trace.groups;
+                newTrace.y = trace.transforms.find(tx => tx.type === 'aggregate')?.aggregations?.[0]?.target || trace.y;
+            }
+            return builderFn(newTrace, transformedRows);
+        });
 
         const fig: PlotlyFigure = {
             data,
@@ -150,12 +185,7 @@ export const buildPlot = async (instructions: PlotlyInstructions, csvText: strin
         return { fig, desc: instructions.desc };
     } catch (e) {
         console.error("Error building plot:", e);
-        throw new Error("Failed to parse data or build plot from instructions.");
+        const errorMessage = e instanceof Error ? e.message : "An unknown error occurred";
+        throw new Error(`Failed to build plot. ${errorMessage}`);
     }
 };
-
-export function isPlotRequest(prompt: string): boolean {
-    const p = prompt.toLowerCase();
-    const keywords = ['plot', 'graph', 'chart', 'visualize', 'draw', 'show me', 'line', 'bar', 'scatter', 'heat', 'box', 'violin'];
-    return keywords.some(keyword => p.includes(keyword));
-}
