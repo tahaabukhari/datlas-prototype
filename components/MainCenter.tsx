@@ -3,10 +3,9 @@ import { Message, UploadedFile } from '../types';
 import { useFiles } from '../context/FileContext';
 import { useUI } from '../context/UIContext';
 import { useDashboard } from '../context/DashboardContext';
-import { analyseRequest, buildPlot } from '../lib/plotlyPipeline';
+import { runPipeline } from '../lib/plotlyPipeline';
 import { MicrophoneIcon, StopCircleIcon, XMarkIcon, PaperClipIcon, PaperAirplaneIcon, Bars3Icon, ChartBarIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
-import { GoogleGenAI, Chat, Part } from '@google/genai';
-import { parse } from 'csv-parse/sync';
+import { GoogleGenAI, Chat } from '@google/genai';
 
 const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
     if (message.sender === 'system') {
@@ -138,7 +137,7 @@ const MainCenter: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const { files, addFiles } = useFiles();
     const { openLeftSidebar, openRightSidebar, isDashboardOpen, openDashboard, closeDashboard } = useUI();
-    const { addPlot } = useDashboard();
+    const { addPlot, addDashboard } = useDashboard();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const chat = useRef<Chat | null>(null);
@@ -219,30 +218,26 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
         })();
         
         const plotPromise = shouldPlot
-          ? (async () => {
-              const headers = Object.keys(parse(csvContent, { columns: true, skip_empty_lines: true, trim: true, to: 1 })[0] ?? {});
-              if (headers.length === 0) {
-                   throw new Error('Could not read data headers. Please check the CSV file format.');
-              }
-              const plotPrompt = currentInput.trim() === '' ? "Summarize the data in this file with a suitable chart." : currentInput;
-              const ins = await analyseRequest(plotPrompt, headers);
-              return buildPlot(ins, csvContent);
-            })()
+          ? runPipeline(currentInput, csvContent)
           : Promise.resolve(null);
 
         try {
-            // Run text and plot generation in parallel
             const geminiPromiseWithCatch = geminiPromise.catch(e => {
                 console.error("Gemini text generation failed:", e);
-                return null; // Don't let text failure stop plot rendering
+                return null;
             });
 
             if (shouldPlot) {
                 try {
-                    const plotData = await plotPromise;
-                    if (plotData) {
-                        console.log('✅ PLOT DATA:', plotData);
-                        addPlot({ id: `plot-${Date.now()}`, description: plotData.desc, figure: plotData.fig });
+                    const plotResult = await plotPromise;
+                    if (plotResult) {
+                        if (plotResult.kind === 'single') {
+                            console.log('✅ SINGLE PLOT DATA:', plotResult.data);
+                            addPlot({ id: `plot-${Date.now()}`, description: plotResult.data.desc, figure: plotResult.data.fig });
+                        } else if (plotResult.kind === 'dashboard') {
+                            console.log('✅ DASHBOARD DATA:', plotResult.data);
+                            addDashboard({ id: `dash-${Date.now()}`, descriptor: plotResult.data });
+                        }
                         openDashboard();
                     }
                 } catch (e) {
@@ -264,7 +259,6 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
                 }
             }
 
-            // Now handle the text response
             const geminiResponse = await geminiPromiseWithCatch;
             if (geminiResponse) {
                 const botMessage: Message = { id: Date.now() + 1, text: geminiResponse.text, sender: 'bot' };
@@ -335,6 +329,7 @@ You do not generate plots or code. If asked for a plot, just give a short, tsund
             <div className="flex-1 overflow-y-auto p-6 pb-40">
                  <div className="max-w-4xl mx-auto space-y-4">
                     {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
+                    {/* Fix: Corrected typo from TypIndicator to TypingIndicator */}
                     {isLoading && <TypingIndicator />}
                     <div ref={messagesEndRef} />
                 </div>

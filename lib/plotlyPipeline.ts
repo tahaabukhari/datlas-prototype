@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import { parse } from 'csv-parse/sync';
 import { PlotlyFigure } from '../types';
 
@@ -34,26 +34,64 @@ export type PlotlyInstructions = {
   desc: string;
 };
 
+// From Gemini
+export type DashboardDescriptor = {
+  title: string;
+  charts: PlotlyInstructions[];
+  globalFilters?: { field: string; op: '>' | '<' | '==' | '!='; value: string | number }[];
+  desc: string;
+};
+
+// Processed for rendering
+export type ProcessedDashboard = {
+    title: string;
+    desc: string;
+    charts: {
+        figure: PlotlyFigure;
+        instructions: PlotlyInstructions;
+    }[];
+};
+
+export type PipelineResult =
+  | { kind: 'single'; data: { fig: PlotlyFigure, desc: string } }
+  | { kind: 'dashboard'; data: ProcessedDashboard };
+  
+type RawAnalysisResult = {
+    mode: 'single' | 'dashboard';
+    single: PlotlyInstructions;
+    dashboard: DashboardDescriptor;
+};
+
+
 const MAX_ROWS = 1000;
 
-export async function analyseRequest(prompt: string, headers: string[]): Promise<PlotlyInstructions> {
+async function analyseRequest(prompt: string, headers: string[]): Promise<RawAnalysisResult> {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const headersString = headers.join(', ');
 
-    const system = `You are Plotly-Builder 3.0.
+    const system = `You are Plotly-Dashboard-Builder 4.0.
 You receive:
 - User request
 - CSV column headers
-You reply **only** a JSON object that matches TypeScript type PlotlyInstructions.
+
+Reply **only** JSON of shape:
+{
+  "mode": "single" | "dashboard",
+  "single": { ...PlotlyInstructions },
+  "dashboard": {
+    "title": "string",
+    "charts": [ {...PlotlyInstructions}, ... ],
+    "globalFilters": [{field, op, value}, ...],
+    "desc": "string"
+  }
+}
 
 Rules:
-- Use **only column names that exist** in the headers provided.
-- If request mentions filtering (e.g. "sales > 100") set filters accordingly.
-- If request mentions aggregation (e.g. "sum by region") set the 'aggregate' transform, choose the correct operator, and set the 'groups' property on the trace to the region column.
-- Pick colours from midnight palette: #fff #22d3ee #a78bfa #f472b6 #fbbf24 #34d499
-- Title, axis titles and trace names must be **exactly** what the user asked for.
-- If ambiguous, pick the **most obvious** chart and explain in desc.
-- Reply **only** JSON, no markdown, no comments.`;
+- Use **only column names that exist** in the header.
+- If user asks for **multiple views**, **comparisons**, **by region**, **over time**, **summary + detail**, etc. -> set mode:"dashboard".
+- If user asks for **one chart** -> set mode:"single".
+- Colours: midnight palette (#fff #22d3ee #a78bfa #f472b6 #fbbf24 #34d499).
+- Reply **only JSON**, no markdown.`;
     
     const fullPrompt = `${system}\n\nUser request: "${prompt}"\n\nCSV Headers:\n${headersString}`;
 
@@ -61,21 +99,28 @@ Rules:
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-pro',
             contents: fullPrompt,
-            config: {
-                responseMimeType: "application/json",
-            },
+            config: { responseMimeType: "application/json" },
         });
         
         const jsonText = response.text.trim();
         const instructions = JSON.parse(jsonText);
         
-        // Add defaults to prevent crashes and enforce dark theme
-        instructions.layout.paper_bgcolor = 'transparent';
-        instructions.layout.plot_bgcolor = 'transparent';
-        instructions.layout.font = { color: '#fff' };
-        instructions.layout.margin = { l: 60, r: 20, t: 40, b: 60, ...(instructions.layout.margin || {}) };
+        const sanitizeInstructions = (instr: PlotlyInstructions) => {
+            if (!instr) return null;
+            instr.layout.paper_bgcolor = 'transparent';
+            instr.layout.plot_bgcolor = 'transparent';
+            instr.layout.font = { color: '#fff' };
+            instr.layout.margin = { l: 60, r: 20, t: 40, b: 60, ...(instr.layout.margin || {}) };
+            return instr;
+        };
+
+        if (instructions.mode === 'dashboard' && instructions.dashboard?.charts) {
+            instructions.dashboard.charts = instructions.dashboard.charts.map(sanitizeInstructions);
+        } else if (instructions.mode === 'single' && instructions.single) {
+            instructions.single = sanitizeInstructions(instructions.single);
+        }
         
-        return instructions as PlotlyInstructions;
+        return instructions as RawAnalysisResult;
 
     } catch (e) {
         console.error("Error calling Gemini API or parsing response:", e);
@@ -150,16 +195,9 @@ const BUILDERS: Record<string, (t: any, rows: any[]) => any> = {
     treemap: (t, rows) => ({ labels: rows.map(r => r[t.x]), parents: rows.map(r => r[t.y]), values: rows.map(r => r[t.z]), type: 'treemap', name: t.name }),
 };
 
-export const buildPlot = async (instructions: PlotlyInstructions, csvText: string): Promise<{ fig: PlotlyFigure; desc: string }> => {
+async function buildPlot(instructions: PlotlyInstructions, allRows: any[]): Promise<{ fig: PlotlyFigure; desc: string }> {
     try {
-        const rows = parse(csvText, {
-            columns: true,
-            skip_empty_lines: true,
-            cast: true,
-            trim: true,
-        });
-
-        const cappedRows = rows.slice(0, MAX_ROWS);
+        const cappedRows = allRows.slice(0, MAX_ROWS);
         const builderFn = BUILDERS[instructions.type];
         if (!builderFn) {
             throw new Error(`Unknown plot type: ${instructions.type}`);
@@ -168,8 +206,6 @@ export const buildPlot = async (instructions: PlotlyInstructions, csvText: strin
         const data = instructions.traces.map(trace => {
             const transformedRows = applyTransforms(cappedRows, trace);
             const newTrace = {...trace};
-            // If aggregation was performed, the x and y axes might need to be remapped
-            // e.g., x becomes the grouping column, y becomes the aggregated value column
             if(trace.transforms?.some(tx => tx.type === 'aggregate') && trace.groups) {
                 newTrace.x = trace.groups;
                 newTrace.y = trace.transforms.find(tx => tx.type === 'aggregate')?.aggregations?.[0]?.target || trace.y;
@@ -189,3 +225,45 @@ export const buildPlot = async (instructions: PlotlyInstructions, csvText: strin
         throw new Error(`Failed to build plot. ${errorMessage}`);
     }
 };
+
+export async function runPipeline(prompt: string, csvText: string): Promise<PipelineResult> {
+    const headers = Object.keys(parse(csvText, { columns: true, skip_empty_lines: true, trim: true, to: 1 })[0] ?? {});
+    if (headers.length === 0) {
+         throw new Error('Could not read data headers. Please check the CSV file format.');
+    }
+    const plotPrompt = prompt.trim() === '' ? "Summarize the data in this file with a suitable chart." : prompt;
+    
+    const rawResult = await analyseRequest(plotPrompt, headers);
+
+    const allRows = parse(csvText, {
+        columns: true,
+        skip_empty_lines: true,
+        cast: true,
+        trim: true,
+    });
+
+    if (rawResult.mode === 'dashboard') {
+        let filteredRows = [...allRows];
+        for (const f of rawResult.dashboard.globalFilters ?? []) {
+          filteredRows = filteredRows.filter(r => evalExpr(r[f.field], f.op, f.value));
+        }
+
+        const chartPromises = rawResult.dashboard.charts.map(async instructions => {
+            const { fig } = await buildPlot(instructions, filteredRows);
+            return { figure: fig, instructions };
+        });
+
+        const charts = await Promise.all(chartPromises);
+
+        const processedDashboard: ProcessedDashboard = {
+            title: rawResult.dashboard.title,
+            desc: rawResult.dashboard.desc,
+            charts: charts
+        };
+        return { kind: 'dashboard', data: processedDashboard };
+    } else {
+        // Fallback to single chart
+        const singleResult = await buildPlot(rawResult.single, allRows);
+        return { kind: 'single', data: singleResult };
+    }
+}
