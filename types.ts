@@ -28,6 +28,5 @@ export interface UploadedFile {
 export interface DashboardContent {
   id: string;
   description: string;
-  plotData: string; // base64 image data url
-  code: string;
+  spec: object; // Vega-Lite spec object
 }

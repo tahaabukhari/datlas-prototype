@@ -3,9 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { useFiles } from '../context/FileContext';
 import { useUI } from '../context/UIContext';
 import { 
-    ChevronLeftIcon, PlusIcon, DatabaseIcon, ClockIcon, 
-    InformationCircleIcon, ArrowRightOnRectangleIcon, DocumentTextIcon, XMarkIcon, SpinnerIcon
-} from './icons';
+    ChevronLeftIcon, PlusIcon, CircleStackIcon, ClockIcon, InformationCircleIcon, ArrowRightOnRectangleIcon, DocumentTextIcon, XMarkIcon, ArrowPathIcon
+} from '@heroicons/react/24/outline';
 
 const LeftSideBar: React.FC = () => {
     const [isDesktopCollapsed, setIsDesktopCollapsed] = useState(false);
@@ -47,7 +46,7 @@ const LeftSideBar: React.FC = () => {
                      </div>
                      <h1 className={`text-2xl font-bold ${effectiveIsCollapsed ? 'hidden md:block' : 'hidden'}`}>D</h1>
                      <button onClick={closeSidebars} className="p-1 text-gray-400 hover:text-white md:hidden" aria-label="Close menu">
-                        <XMarkIcon className="w-6 h-6" />
+                        <XMarkIcon className="h-6 w-6" />
                     </button>
                 </div>
                 
@@ -65,7 +64,7 @@ const LeftSideBar: React.FC = () => {
                             onClick={signIn}
                             className={`w-full flex justify-center items-center gap-2 bg-zinc-800 hover:bg-zinc-700 text-sm font-semibold py-2 px-4 rounded-md transition-colors duration-200 ${effectiveIsCollapsed ? 'md:p-2' : ''}`}
                         >
-                           {effectiveIsCollapsed ? <ArrowRightOnRectangleIcon className="w-5 h-5" /> : 'Google Sign-In'}
+                           {effectiveIsCollapsed ? <ArrowRightOnRectangleIcon className="h-5 w-5" /> : 'Google Sign-In'}
                         </button>
                     )}
                 </div>
@@ -75,12 +74,12 @@ const LeftSideBar: React.FC = () => {
                     {/* Datasets Section */}
                     <div onClick={effectiveIsCollapsed ? () => setIsDesktopCollapsed(false) : undefined} className={effectiveIsCollapsed ? 'cursor-pointer' : ''}>
                         <div className={`flex items-center text-sm font-semibold text-gray-500 uppercase tracking-wider ${effectiveIsCollapsed ? 'md:justify-center' : 'pl-2'}`}>
-                            <DatabaseIcon className={`w-4 h-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
+                            <CircleStackIcon className={`h-4 w-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
                             <span className={effectiveIsCollapsed ? 'md:hidden' : 'inline'}>Datasets</span>
                         </div>
                         <div className="mt-3 space-y-2">
                            <button onClick={handleAddDatasetClick} className={`w-full flex items-center justify-center p-2 text-sm rounded-lg border border-zinc-700 text-gray-300 hover:bg-zinc-800 hover:border-zinc-600 transition-all duration-200 group ${effectiveIsCollapsed ? 'md:px-0' : 'space-x-2'}`}>
-                                <PlusIcon className="w-5 h-5 text-gray-400 group-hover:text-gray-200" />
+                                <PlusIcon className="h-5 w-5 text-gray-400 group-hover:text-gray-200" />
                                 <span className={effectiveIsCollapsed ? 'md:hidden' : 'inline'}>Add dataset</span>
                            </button>
                            <input
@@ -96,14 +95,14 @@ const LeftSideBar: React.FC = () => {
                                     {files.map(file => (
                                         <li key={file.url} className="flex items-center justify-between text-sm text-gray-300 bg-zinc-800/50 p-2 rounded-md group" title={file.errorMessage}>
                                             <div className="flex items-center min-w-0">
-                                                <DocumentTextIcon className="w-4 h-4 mr-2 shrink-0" />
+                                                <DocumentTextIcon className="h-4 w-4 mr-2 shrink-0" />
                                                 <span className="truncate" title={file.name}>{file.name}</span>
                                             </div>
                                             <div className="ml-2">
-                                                {file.status === 'uploading' && <SpinnerIcon className="w-4 h-4 text-zinc-400" />}
+                                                {file.status === 'uploading' && <ArrowPathIcon className="h-4 w-4 text-zinc-400 animate-spin" />}
                                                 {file.status === 'ready' && (
                                                     <button onClick={() => removeFile(file.url)} className="text-zinc-500 hover:text-white opacity-0 group-hover:opacity-100 transition-opacity">
-                                                        <XMarkIcon className="w-4 h-4" />
+                                                        <XMarkIcon className="h-4 w-4" />
                                                     </button>
                                                 )}
                                                 {file.status === 'error' && (
@@ -124,7 +123,7 @@ const LeftSideBar: React.FC = () => {
                     {/* History Section */}
                     <div onClick={effectiveIsCollapsed ? () => setIsDesktopCollapsed(false) : undefined} className={effectiveIsCollapsed ? 'cursor-pointer' : ''}>
                         <div className={`flex items-center text-sm font-semibold text-gray-500 uppercase tracking-wider ${effectiveIsCollapsed ? 'md:justify-center' : 'pl-2'}`}>
-                           <ClockIcon className={`w-4 h-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
+                           <ClockIcon className={`h-4 w-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
                            <span className={effectiveIsCollapsed ? 'md:hidden' : 'inline'}>History</span>
                         </div>
                         <div className="mt-3 text-center text-gray-500 text-sm px-2 py-4">
@@ -135,7 +134,7 @@ const LeftSideBar: React.FC = () => {
                      {/* About Section */}
                      <div onClick={effectiveIsCollapsed ? () => setIsDesktopCollapsed(false) : undefined} className={effectiveIsCollapsed ? 'cursor-pointer' : ''}>
                         <div className={`flex items-center text-sm font-semibold text-gray-500 uppercase tracking-wider ${effectiveIsCollapsed ? 'md:justify-center' : 'pl-2'}`}>
-                           <InformationCircleIcon className={`w-4 h-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
+                           <InformationCircleIcon className={`h-4 w-4 ${effectiveIsCollapsed ? '' : 'mr-2'}`} />
                            <span className={effectiveIsCollapsed ? 'md:hidden' : 'inline'}>About</span>
                         </div>
                         <div className={`mt-3 text-left text-gray-500 text-sm px-2 ${effectiveIsCollapsed ? 'md:hidden' : ''}`}>

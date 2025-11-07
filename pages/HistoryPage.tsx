@@ -5,7 +5,7 @@ const HistoryPage: React.FC = () => {
     const { id } = useParams();
 
     return (
-        <div className="flex-1 flex flex-col items-center justify-center bg-zinc-985 p-8">
+        <div className="flex-1 flex flex-col items-center justify-center bg-zinc-950 p-8">
             <h1 className="text-3xl font-bold text-gray-100 mb-4">History Dashboard</h1>
             <p className="text-lg text-gray-400">
                 Displaying historical dashboard for item with ID: <span className="font-mono text-gray-100 bg-zinc-800 px-2 py-1 rounded">{id}</span>

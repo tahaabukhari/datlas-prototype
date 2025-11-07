@@ -6,7 +6,6 @@ import HistoryPage from './pages/HistoryPage';
 import { AuthProvider } from './context/AuthContext';
 import { FileProvider } from './context/FileContext';
 import { UIProvider } from './context/UIContext';
-import { PyodideProvider } from './context/PyodideContext';
 import { DashboardProvider } from './context/DashboardContext';
 
 const App: React.FC = () => {
@@ -14,21 +13,19 @@ const App: React.FC = () => {
     <AuthProvider>
       <FileProvider>
         <UIProvider>
-          <PyodideProvider>
-            <DashboardProvider>
-              <HashRouter>
-                <div className="flex h-full bg-zinc-985 text-gray-100 font-sans antialiased">
-                  <LeftSideBar />
-                  <main className="flex-1 flex flex-col min-w-0">
-                    <Routes>
-                      <Route path="/" element={<ChatInterface />} />
-                      <Route path="/history/:id" element={<HistoryPage />} />
-                    </Routes>
-                  </main>
-                </div>
-              </HashRouter>
-            </DashboardProvider>
-          </PyodideProvider>
+          <DashboardProvider>
+            <HashRouter>
+              <div className="flex h-full bg-zinc-950 text-gray-100 font-sans antialiased">
+                <LeftSideBar />
+                <main className="flex-1 flex flex-col min-w-0">
+                  <Routes>
+                    <Route path="/" element={<ChatInterface />} />
+                    <Route path="/history/:id" element={<HistoryPage />} />
+                  </Routes>
+                </main>
+              </div>
+            </HashRouter>
+          </DashboardProvider>
         </UIProvider>
       </FileProvider>
     </AuthProvider>

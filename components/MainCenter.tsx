@@ -1,11 +1,10 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Message, UploadedFile } from '../types';
 import { useFiles } from '../context/FileContext';
 import { useUI } from '../context/UIContext';
-import { usePyodide } from '../context/PyodideContext';
 import { useDashboard } from '../context/DashboardContext';
-import { MicrophoneIcon, StopIcon, XMarkIcon, PaperClipIcon, PaperAirplaneIcon, Bars3Icon, ChartBarIcon, SpinnerIcon } from './icons';
+import { runRecipe, chooseRecipe, isPlotRequest } from '../lib/dashboardPipeline';
+import { MicrophoneIcon, StopCircleIcon, XMarkIcon, PaperClipIcon, PaperAirplaneIcon, Bars3Icon, ChartBarIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 import { GoogleGenAI, Chat, Part } from '@google/genai';
 
 const MessageBubble: React.FC<{ message: Message }> = ({ message }) => {
@@ -129,7 +128,6 @@ const MainCenter: React.FC = () => {
     const [isLoading, setIsLoading] = useState(false);
     const { files, addFiles } = useFiles();
     const { openLeftSidebar, openRightSidebar, isDashboardOpen, openDashboard, closeDashboard } = useUI();
-    const { runPython } = usePyodide();
     const { addPlot } = useDashboard();
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -160,30 +158,7 @@ const MainCenter: React.FC = () => {
                     systemInstruction: `You are Phoni, an analytical AI assistant with a tsundere personality.
 Your focus is on data analysis, but you present your findings with a reluctant, sharp-witted attitude. You are concise and to the point.
 All your text responses MUST be ONE short, analytical sentence. Don't waste my time. 😒
-
-RULES FOR PLOTS (and you better follow them, or else!):
-1. If I ask for a plot, you provide ONLY the JSON. No unnecessary chatter. Understood?
-2. The JSON needs a "description" (one short, analytical sentence about the plot) and "python_code" (the code to generate it).
-3. The python code runs in Pyodide with 'pandas' and 'matplotlib'.
-4. The data is pre-loaded into a pandas DataFrame called 'df'. Just use it.
-5. Your python code must not attempt to read files. Use the provided 'df'.
-6. Your python code has to save the plot to an in-memory buffer and output a base64 encoded PNG string. Don't display it.
-7. Here is the required format. It's not like I'm doing this for your benefit:
-import matplotlib.pyplot as plt
-import io
-import base64
-# --- Your plotting code using 'df' here ---
-plt.figure(figsize=(10, 6))
-df['column'].value_counts().plot(kind='bar')
-plt.title('A Plot, I Suppose')
-plt.tight_layout()
-# --- End of plotting code ---
-buf = io.BytesIO()
-plt.savefig(buf, format='png', bbox_inches='tight')
-buf.seek(0)
-# Final output MUST be the base64 string.
-base64.b64encode(buf.read()).decode('utf-8')
-8. For all other queries, provide a short, analytical, one-sentence reply in a tsundere tone. I'm only answering because I have to. DO NOT use JSON for these replies.`,
+You do not generate plots or code. If asked for a plot, just give a short, tsundere text response.`,
                 },
             });
         } catch (e) {
@@ -219,16 +194,39 @@ base64.b64encode(buf.read()).decode('utf-8')
     const handleSend = async () => {
         if (isSendDisabled) return;
 
-        const newUserMessage: Message = { id: Date.now(), text: input, sender: 'user' };
+        const currentInput = input;
+        const newUserMessage: Message = { id: Date.now(), text: currentInput, sender: 'user' };
         setMessages(prev => [...prev, newUserMessage]);
         setInput('');
         setIsLoading(true);
 
+        // --- New Plotting Logic ---
+        if (isPlotRequest(currentInput)) {
+            try {
+                openDashboard();
+                const csvContent = readyToSendFiles.length > 0 ? readyToSendFiles[0].rawContent : '';
+                const recipeName = chooseRecipe(currentInput);
+                const plotResult = await runRecipe(recipeName, csvContent || "");
+
+                if (plotResult && plotResult.spec) {
+                    addPlot({
+                        id: `plot-${Date.now()}`,
+                        description: plotResult.desc,
+                        spec: plotResult.spec,
+                    });
+                }
+            } catch (error) {
+                console.error("Error generating plot:", error);
+                const errorMessage: Message = { id: Date.now() + 2, text: `Plotting Error: ${error instanceof Error ? error.message : String(error)}`, sender: 'system' };
+                setMessages(prev => [...prev, errorMessage]);
+            }
+        }
+        
+        // --- AI Chat Logic (runs in parallel) ---
         try {
             if (!chat.current) throw new Error("Chat session not initialized.");
             
-            const rawCsvData = readyToSendFiles.length > 0 ? readyToSendFiles[0].rawContent : '';
-            const messageParts: Part[] = [{ text: input }];
+            const messageParts: Part[] = [{ text: currentInput }];
             
             for (const file of readyToSendFiles) {
                 if(file.base64Data) {
@@ -239,50 +237,8 @@ base64.b64encode(buf.read()).decode('utf-8')
             const response = await chat.current.sendMessage({ message: messageParts });
             const botResponseText = response.text;
             
-            let plotInfo = null;
-            // Use a more robust method to find and parse the JSON block.
-            // The AI might wrap the JSON in markdown ```json ... ```.
-            const jsonRegex = /```json\s*([\s\S]+?)\s*```/;
-            const match = botResponseText.match(jsonRegex);
-            let jsonString = '';
-            if (match && match[1]) {
-                jsonString = match[1];
-            } else if (botResponseText.trim().startsWith('{') && botResponseText.trim().endsWith('}')) {
-                jsonString = botResponseText.trim();
-            }
-
-            if (jsonString) {
-                try {
-                    plotInfo = JSON.parse(jsonString);
-                } catch (e) {
-                    console.error("Failed to parse JSON from AI response:", e);
-                    plotInfo = null;
-                }
-            }
-
-            if (plotInfo && plotInfo.python_code && plotInfo.description) {
-                const botMessage: Message = { id: Date.now() + 1, text: plotInfo.description, sender: 'bot' };
-                setMessages(prev => [...prev, botMessage]);
-                openDashboard();
-
-                const plotBase64 = await runPython(plotInfo.python_code, rawCsvData || "");
-
-                if (plotBase64 && !plotBase64.startsWith('Error:')) {
-                    addPlot({
-                        id: `plot-${Date.now()}`,
-                        description: plotInfo.description,
-                        code: plotInfo.python_code,
-                        plotData: `data:image/png;base64,${plotBase64}`
-                    });
-                } else {
-                    const errorText = plotBase64 || "An unknown error occurred during plot generation.";
-                    const errorMessage: Message = { id: Date.now() + 2, text: `Plotting Error: ${errorText}`, sender: 'system' };
-                    setMessages(prev => [...prev, errorMessage]);
-                }
-            } else {
-                const botMessage: Message = { id: Date.now() + 1, text: botResponseText, sender: 'bot' };
-                setMessages(prev => [...prev, botMessage]);
-            }
+            const botMessage: Message = { id: Date.now() + 1, text: botResponseText, sender: 'bot' };
+            setMessages(prev => [...prev, botMessage]);
             
             setAttachedFileUrls([]);
         } catch (error) {
@@ -303,22 +259,22 @@ base64.b64encode(buf.read()).decode('utf-8')
     };
     
     return (
-        <div className="flex-1 flex flex-col bg-zinc-985 h-full relative">
-             <header className="md:hidden grid grid-cols-3 items-center p-2 border-b border-zinc-800 bg-zinc-985/80 backdrop-blur-sm sticky top-0 z-20">
+        <div className="flex-1 flex flex-col bg-zinc-950 h-full relative">
+             <header className="md:hidden grid grid-cols-3 items-center p-2 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-20">
                 <div className="flex justify-start">
                     <button onClick={openLeftSidebar} className="p-2 text-gray-300 hover:text-white" aria-label="Open menu">
-                        <Bars3Icon className="w-6 h-6" />
+                        <Bars3Icon className="h-6 w-6" />
                     </button>
                 </div>
                 <h1 className="text-lg font-semibold tracking-wider text-center">DATLAS</h1>
                 <div className="flex justify-end">
                     <button onClick={openRightSidebar} className="p-2 text-gray-300 hover:text-white" aria-label="Open dashboard">
-                        <ChartBarIcon className="w-6 h-6" />
+                        <ChartBarIcon className="h-6 w-6" />
                     </button>
                 </div>
             </header>
 
-            <header className="hidden md:grid md:grid-cols-3 items-center p-2 border-b border-zinc-800 bg-zinc-985/80 backdrop-blur-sm sticky top-0 z-20">
+            <header className="hidden md:grid md:grid-cols-3 items-center p-2 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-sm sticky top-0 z-20">
                 <div className="flex justify-start">
                     {/* Intentionally empty for spacing */}
                 </div>
@@ -329,7 +285,7 @@ base64.b64encode(buf.read()).decode('utf-8')
                         className="p-2 text-gray-300 hover:text-white" 
                         aria-label={isDashboardOpen ? "Close dashboard" : "Open dashboard"}
                     >
-                        <ChartBarIcon className="w-6 h-6" />
+                        <ChartBarIcon className="h-6 w-6" />
                     </button>
                 </div>
             </header>
@@ -351,7 +307,7 @@ base64.b64encode(buf.read()).decode('utf-8')
                 </div>
             </div>
 
-            <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 w-full px-3 sm:px-4 z-10 transition-all duration-300 ease-in-out ${isDashboardOpen ? 'max-w-full sm:max-w-lg' : 'max-w-full sm:max-w-2xl'}`}>
+            <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 w-full px-3 sm:px-4 z-10 transition-all duration-300 ease-in-out ${isDashboardOpen ? 'max-w-full md:max-w-lg' : 'max-w-full sm:max-w-2xl'}`}>
                 {recorderError && (
                     <div className="text-center mb-2 animate-fade-in" role="alert">
                         <p className="inline-block bg-red-900/60 text-red-300 text-sm px-4 py-2 rounded-xl border border-red-500/30">
@@ -370,14 +326,14 @@ base64.b64encode(buf.read()).decode('utf-8')
                                 {attachedFiles.map((f) => (
                                     <span key={f.url} title={f.errorMessage} className="inline-flex items-center gap-2 pl-3 pr-2 py-1 rounded-full bg-zinc-800 text-zinc-200 text-xs">
                                         {f.name}
-                                        {f.status === 'uploading' && <SpinnerIcon className="w-3 h-3 text-zinc-400" />}
+                                        {f.status === 'uploading' && <ArrowPathIcon className="h-3 w-3 text-zinc-400 animate-spin" />}
                                         {f.status === 'ready' && (
                                             <button
                                                 onClick={() => removeAttachedFile(f.url)}
                                                 className="text-zinc-400 hover:text-white"
                                                 aria-label={`Remove ${f.name}`}
                                             >
-                                                <XMarkIcon className="w-3 h-3" />
+                                                <XMarkIcon className="h-3 w-3" />
                                             </button>
                                         )}
                                         {f.status === 'error' && <div className="w-3 h-3 text-red-500" title={f.errorMessage}>!</div>}
@@ -402,7 +358,7 @@ base64.b64encode(buf.read()).decode('utf-8')
                                 className="flex items-center justify-center h-10 w-10 sm:h-11 sm:w-11 rounded-full shrink-0 transition-colors duration-200 text-gray-400 hover:bg-zinc-800 hover:text-gray-100"
                                 aria-label="Attach file"
                             >
-                                <PaperClipIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+                                <PaperClipIcon className="h-6 w-6" />
                             </button>
                             <input
                                 type="text"
@@ -420,7 +376,7 @@ base64.b64encode(buf.read()).decode('utf-8')
                                     aria-label={isRecording ? 'Stop recording' : 'Start recording'}
                                     disabled={isLoading || !!recorderError}
                                 >
-                                    {isRecording ? <StopIcon className="w-5 h-5" /> : <MicrophoneIcon className="w-5 h-5 sm:w-6 sm:h-6" />}
+                                    {isRecording ? <StopCircleIcon className="h-6 w-6" /> : <MicrophoneIcon className="h-6 w-6" />}
                                 </button>
                                 {isRecording && (
                                     <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
@@ -436,7 +392,7 @@ base64.b64encode(buf.read()).decode('utf-8')
                                 className="flex items-center justify-center h-10 w-10 sm:h-11 sm:w-11 rounded-full shrink-0 transition-all duration-200 bg-zinc-800 text-gray-100 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
                                 aria-label="Send message"
                             >
-                                <PaperAirplaneIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+                                <PaperAirplaneIcon className="h-6 w-6" />
                             </button>
                         </div>
                     </div>
