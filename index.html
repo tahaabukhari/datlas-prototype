@@ -13,6 +13,13 @@
         overscroll-behavior: none; /* Disables pull-to-refresh */
       }
     </style>
+    <!-- Polyfill for Buffer, which is required by some dependencies in a browser environment -->
+    <script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/index.min.js"></script>
+    <script>
+        if (typeof window.Buffer === 'undefined' && typeof buffer !== 'undefined') {
+            window.Buffer = buffer.Buffer;
+        }
+    </script>
     <script src="https://cdn.tailwindcss.com/"></script>
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js" charset="utf-8"></script>
